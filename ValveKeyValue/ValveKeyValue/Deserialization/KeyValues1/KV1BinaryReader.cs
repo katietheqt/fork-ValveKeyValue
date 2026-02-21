@@ -30,7 +30,6 @@ namespace ValveKeyValue.Deserialization.KeyValues1
         readonly IVisitationListener listener;
         readonly StringTable stringTable;
         bool disposed;
-        KV1BinaryNodeType endMarker = KV1BinaryNodeType.End;
 
         public void ReadObject()
         {
@@ -70,7 +69,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
             KV1BinaryNodeType type = ReadNextNodeType();
 
             // Keep reading values, until we reach the terminator
-            while (type != endMarker)
+            while (type != KV1BinaryNodeType.End && type != KV1BinaryNodeType.AlternateEnd)
             {
                 ReadValue(type);
                 type = ReadNextNodeType();
@@ -185,10 +184,6 @@ namespace ValveKeyValue.Deserialization.KeyValues1
             if (reader.ReadUInt32() == BinaryMagicHeader)
             {
                 stream.Position += 4; // Skip crc32
-
-                // There is likely no reason to handle this separately
-                // as the types do not conflict between Steam or Dota 2
-                endMarker = KV1BinaryNodeType.AlternateEnd;
             }
             else
             {

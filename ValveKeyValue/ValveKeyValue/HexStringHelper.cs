@@ -9,11 +9,15 @@ namespace ValveKeyValue
         {
             ArgumentNullException.ThrowIfNull(hexadecimalRepresentation);
 
+            if (hexadecimalRepresentation.Length % 2 != 0)
+            {
+                throw new InvalidDataException($"Hex string has odd length ({hexadecimalRepresentation.Length}), expected even number of hex characters.");
+            }
+
             var data = new byte[hexadecimalRepresentation.Length / 2];
             for (var i = 0; i < data.Length; i++)
             {
-                var currentByteText = hexadecimalRepresentation.Substring(i * 2, 2);
-                data[i] = byte.Parse(currentByteText, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                data[i] = byte.Parse(hexadecimalRepresentation.AsSpan(i * 2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
             }
 
             return data;

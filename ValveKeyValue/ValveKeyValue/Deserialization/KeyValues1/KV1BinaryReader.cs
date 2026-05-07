@@ -25,13 +25,15 @@ namespace ValveKeyValue.Deserialization.KeyValues1
             reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
         }
 
+#pragma warning disable CA2213 // Not owned by this class
         readonly Stream stream;
-        readonly BinaryReader reader;
         readonly IVisitationListener listener;
+#pragma warning restore CA2213
+        readonly BinaryReader reader;
         readonly StringTable stringTable;
         bool disposed;
 
-        public void ReadObject()
+        public KVHeader ReadHeader()
         {
             ObjectDisposedException.ThrowIf(disposed, this);
 
@@ -53,6 +55,8 @@ namespace ValveKeyValue.Deserialization.KeyValues1
             {
                 throw new KeyValueException("Error while parsing binary KeyValues.", ex);
             }
+
+            return new KVHeader();
         }
 
         public void Dispose()
@@ -90,19 +94,19 @@ namespace ValveKeyValue.Deserialization.KeyValues1
         void ReadValue(KV1BinaryNodeType type)
         {
             var name = ReadKeyForNextValue();
-            KVValue value;
+            KVObject value;
 
             switch (type)
             {
                 case KV1BinaryNodeType.ChildObject:
-                    listener.OnObjectStart(name);
+                    listener.OnObjectStart(name, KVFlag.None);
                     ReadObjectCore();
                     listener.OnObjectEnd();
                     return;
 
                 case KV1BinaryNodeType.String:
                     // UTF8 encoding is used for string values
-                    value = new KVObjectValue<string>(ReadNullTerminatedUtf8String(), KVValueType.String);
+                    value = new KVObject(ReadNullTerminatedUtf8String());
                     break;
 
                 case KV1BinaryNodeType.WideString:
@@ -110,24 +114,26 @@ namespace ValveKeyValue.Deserialization.KeyValues1
 
                 case KV1BinaryNodeType.Int32:
                 case KV1BinaryNodeType.Color:
+                    value = new KVObject(reader.ReadInt32());
+                    break;
+
                 case KV1BinaryNodeType.Pointer:
-                    value = new KVObjectValue<int>(reader.ReadInt32(), KVValueType.Int32);
+                    value = new KVObject(KVValueType.Pointer, (long)reader.ReadInt32());
                     break;
 
                 case KV1BinaryNodeType.UInt64:
-                    value = new KVObjectValue<ulong>(reader.ReadUInt64(), KVValueType.UInt64);
+                    value = new KVObject(reader.ReadUInt64());
                     break;
 
                 case KV1BinaryNodeType.Float32:
-                    var floatValue = BitConverter.ToSingle(reader.ReadBytes(4), 0);
-                    value = new KVObjectValue<float>(floatValue, KVValueType.FloatingPoint);
+                    value = new KVObject(reader.ReadSingle());
                     break;
 
                 case KV1BinaryNodeType.ProbablyBinary:
                     throw new NotSupportedException("Hit kv type 9, please create an issue saying where you found it: https://github.com/ValveResourceFormat/ValveKeyValue/issues");
 
                 case KV1BinaryNodeType.Int64:
-                    value = new KVObjectValue<long>(reader.ReadInt64(), KVValueType.Int64);
+                    value = new KVObject(reader.ReadInt64());
                     break;
 
                 default:

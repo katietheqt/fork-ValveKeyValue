@@ -2,12 +2,16 @@ namespace ValveKeyValue.Deserialization
 {
     class KVPartialState
     {
-        public string Key { get; set; }
+        public string? Key { get; set; }
 
-        public KVValue Value { get; set; }
+        public KVFlag Flag { get; set; }
 
-        public IList<KVObject> Items { get; } = new List<KVObject>();
+        public KVObject? Value { get; set; }
+
+        public List<KeyValuePair<string, KVObject>> Items { get; } = new List<KeyValuePair<string, KVObject>>();
 
         public bool Discard { get; set; }
+
+        public bool IsArray { get; set; }
     }
 }

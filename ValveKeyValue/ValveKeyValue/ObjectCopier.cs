@@ -25,7 +25,7 @@ namespace ValveKeyValue
             ArgumentNullException.ThrowIfNull(keyValueObject);
             ArgumentNullException.ThrowIfNull(reflector);
 
-            if (keyValueObject.Value.ValueType == KVValueType.Collection)
+            if (keyValueObject.ValueType == KVValueType.Collection)
             {
                 if (IsLookupWithStringKey(typeof(TObject), out var lookupValueType))
                 {
@@ -50,42 +50,34 @@ namespace ValveKeyValue
                 CopyObject(keyValueObject, typeof(TObject), typedObject, reflector);
                 return (TObject)typedObject;
             }
-            else if (TryConvertValueTo<TObject>(keyValueObject.Name, keyValueObject.Value, out var converted))
+            else if (keyValueObject.ValueType == KVValueType.Array)
+            {
+                var arrayValues = keyValueObject.Values.Select(c => (object)c).ToArray();
+                if (ConstructTypedEnumerable(typeof(TObject), arrayValues, reflector, out var enumerable))
+                {
+                    return (TObject)enumerable;
+                }
+
+                throw new NotSupportedException($"Cannot convert Array to {typeof(TObject).Name}.");
+            }
+            else if (TryConvertValueTo<TObject>(keyValueObject, out var converted))
             {
                 return converted;
             }
             else
             {
                 // TODO: For nullable types this typeof is not that useful
-                throw new NotSupportedException($"Converting to {typeof(TObject).Name} is not supported. (key = {keyValueObject.Name}, type = {keyValueObject.Value.ValueType})");
+                throw new NotSupportedException($"Converting to {typeof(TObject).Name} is not supported. (type = {keyValueObject.ValueType})");
             }
         }
 
         public static KVObject FromObject(
             [DynamicallyAccessedMembers(Trimming.Properties)] Type objectType,
-            object managedObject,
-            string topLevelName)
-            => FromObjectCore(objectType, managedObject, topLevelName, new DefaultObjectReflector(), new HashSet<object>());
-
-        static KVObject FromObjectCore(
-            [DynamicallyAccessedMembers(Trimming.Properties)] Type objectType,
-            object managedObject,
-            string topLevelName,
-            IObjectReflector reflector,
-            HashSet<object> visitedObjects)
-        {
-            ArgumentNullException.ThrowIfNull(objectType);
-            ArgumentNullException.ThrowIfNull(managedObject);
-            ArgumentNullException.ThrowIfNull(topLevelName);
-            ArgumentNullException.ThrowIfNull(reflector);
-            ArgumentNullException.ThrowIfNull(visitedObjects);
-
-            var transformedValue = ConvertObjectToValue(objectType, managedObject, reflector, visitedObjects);
-            return new KVObject(topLevelName, transformedValue);
-        }
+            object managedObject)
+            => ConvertObjectToValue(objectType, managedObject, new DefaultObjectReflector(), new HashSet<object>());
 
         [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2072", Justification = "If the IDictionary's value object already exists at runtime then its properties will too.")]
-        static KVValue ConvertObjectToValue(
+        static KVObject ConvertObjectToValue(
             [DynamicallyAccessedMembers(Trimming.Properties)] Type objectType,
             object managedObject,
             IObjectReflector reflector,
@@ -96,13 +88,13 @@ namespace ValveKeyValue
                 throw new KeyValueException("Serialization failed - circular object reference detected.");
             }
 
-            var attemptedKvValue = ConvertToKVValue(managedObject, objectType);
+            var attemptedKvValue = ConvertToKVObject(managedObject, objectType);
             if (attemptedKvValue != null)
             {
                 return attemptedKvValue;
             }
 
-            var childObjects = new KVCollectionValue();
+            var childItems = new List<KeyValuePair<string, KVObject>>();
 
             if (typeof(IDictionary).IsAssignableFrom(objectType))
             {
@@ -112,35 +104,40 @@ namespace ValveKeyValue
                 {
                     var entry = enumerator.Entry;
 
-                    var childObjectValue = ConvertObjectToValue(entry.Value.GetType(), entry.Value, reflector, visitedObjects);
-                    childObjects.Add(new KVObject(entry.Key.ToString(), childObjectValue));
+                    var childObjectValue = ConvertObjectToValue(entry.Value!.GetType(), entry.Value, reflector, visitedObjects);
+                    childItems.Add(new KeyValuePair<string, KVObject>(entry.Key.ToString()!, childObjectValue));
                 }
+            }
+            else if (objectType == typeof(byte[]))
+            {
+                return KVObject.Blob((byte[])managedObject);
             }
             else if (objectType.IsArray || typeof(IEnumerable).IsAssignableFrom(objectType))
             {
                 var counter = 0;
                 foreach (var child in (IEnumerable)managedObject)
                 {
-                    var childKVObject = FromObjectCore(child.GetType(), child, counter.ToString(), reflector, visitedObjects);
-                    childObjects.Add(childKVObject);
+                    var childValue = ConvertObjectToValue(child.GetType(), child, reflector, visitedObjects);
+                    childItems.Add(new KeyValuePair<string, KVObject>(counter.ToString(CultureInfo.InvariantCulture), childValue));
 
                     counter++;
                 }
             }
             else
             {
-                foreach (var member in reflector.GetMembers(objectType, managedObject).OrderBy(p => p.Name, StringComparer.InvariantCulture))
+                foreach (var member in reflector.GetMembers(objectType, managedObject))
                 {
-                    if (!member.MemberType.IsValueType && member.Value is null)
+                    if (member.Value is null)
                     {
                         continue;
                     }
 
-                    childObjects.Add(FromObjectCore(member.Value.GetType(), member.Value, member.Name, reflector, visitedObjects));
+                    var childValue = ConvertObjectToValue(member.Value!.GetType(), member.Value, reflector, visitedObjects);
+                    childItems.Add(new KeyValuePair<string, KVObject>(member.Name, childValue));
                 }
             }
 
-            return childObjects;
+            return new KVObject(KVValueType.Collection, childItems);
         }
 
         static void CopyObject(KVObject kv, [DynamicallyAccessedMembers(Trimming.Properties)] Type objectType, object obj, IObjectReflector reflector)
@@ -151,29 +148,29 @@ namespace ValveKeyValue
 
             var members = reflector.GetMembers(objectType, obj).ToDictionary(m => m.Name, m => m, StringComparer.OrdinalIgnoreCase);
 
-            foreach (var item in kv.Children)
+            foreach (var (key, child) in kv)
             {
-                if (!members.TryGetValue(item.Name, out var member))
+                if (!members.TryGetValue(key, out var member))
                 {
                     continue;
                 }
 
-                var convertedValue = MakeObject(member.MemberType, item, reflector);
+                var convertedValue = MakeObject(member.MemberType, child, reflector);
                 member.Value = convertedValue;
             }
         }
 
-        static bool IsArray(KVObject obj, out KVValue[] values)
+        static bool IsArray(KVObject obj, [MaybeNullWhen(false)] out object[] values)
         {
-            values = null;
+            values = null!;
 
-            if (obj.Children.Any(i => !IsNumeric(i.Name)))
+            if (obj.Any(kvp => !IsNumeric(kvp.Key)))
             {
                 return false;
             }
 
-            var items = obj.Children
-                .Select(i => new { Index = int.Parse(i.Name, NumberStyles.Number, CultureInfo.InvariantCulture), i.Value })
+            var items = obj
+                .Select(kvp => new { Index = int.Parse(kvp.Key, NumberStyles.Number, CultureInfo.InvariantCulture), kvp.Value })
                 .OrderBy(i => i.Index)
                 .ToArray();
 
@@ -185,13 +182,13 @@ namespace ValveKeyValue
                 }
             }
 
-            values = items.Select(i => i.Value).ToArray();
+            values = items.Select(i => (object)i.Value).ToArray();
             return true;
         }
 
-        static bool IsLookupWithStringKey(Type type, out Type valueType)
+        static bool IsLookupWithStringKey(Type type, [MaybeNullWhen(false)] out Type valueType)
         {
-            valueType = null;
+            valueType = null!;
 
             if (!type.IsConstructedGenericType)
             {
@@ -221,21 +218,22 @@ namespace ValveKeyValue
 
         static object MakeLookup(
             [DynamicallyAccessedMembers(Trimming.Constructors | Trimming.Properties)] Type valueType,
-            IEnumerable<KVObject> items,
+            KVObject obj,
             IObjectReflector reflector)
-            => InvokeGeneric(nameof(MakeLookupCore), valueType, new object[] { items, reflector });
+            => InvokeGeneric(nameof(MakeLookupCore), valueType, new object[] { obj, reflector });
 
-        static ILookup<string, TValue> MakeLookupCore<[DynamicallyAccessedMembers(Trimming.Constructors | Trimming.Properties)] TValue>(IEnumerable<KVObject> items, IObjectReflector reflector)
+        static ILookup<string, TValue> MakeLookupCore<[DynamicallyAccessedMembers(Trimming.Constructors | Trimming.Properties)] TValue>(KVObject obj, IObjectReflector reflector)
         {
-            TValue valueConversionFunc(KVObject kv) => ConvertValue<TValue>(kv.Value, reflector);
-
-            return items.ToLookup(kv => kv.Name, valueConversionFunc);
+            return obj.ToLookup(kvp => kvp.Key, kvp => ConvertValue<TValue>(kvp.Value, reflector));
         }
 
         static readonly Dictionary<Type, Func<Type, object[], IObjectReflector, object>> EnumerableBuilders = new()
         {
             [typeof(List<>)] = (type, values, reflector) => InvokeGeneric(nameof(MakeList), type.GetGenericArguments()[0], new object[] { values, reflector }),
             [typeof(IList<>)] = (type, values, reflector) => InvokeGeneric(nameof(MakeList), type.GetGenericArguments()[0], new object[] { values, reflector }),
+            [typeof(IReadOnlyList<>)] = (type, values, reflector) => InvokeGeneric(nameof(MakeList), type.GetGenericArguments()[0], new object[] { values, reflector }),
+            [typeof(IReadOnlyCollection<>)] = (type, values, reflector) => InvokeGeneric(nameof(MakeList), type.GetGenericArguments()[0], new object[] { values, reflector }),
+            [typeof(IEnumerable<>)] = (type, values, reflector) => InvokeGeneric(nameof(MakeList), type.GetGenericArguments()[0], new object[] { values, reflector }),
             [typeof(Collection<>)] = (type, values, reflector) => InvokeGeneric(nameof(MakeCollection), type.GetGenericArguments()[0], new object[] { values, reflector }),
             [typeof(ICollection<>)] = (type, values, reflector) => InvokeGeneric(nameof(MakeCollection), type.GetGenericArguments()[0], new object[] { values, reflector }),
             [typeof(ObservableCollection<>)] = (type, values, reflector) => InvokeGeneric(nameof(MakeObservableCollection), type.GetGenericArguments()[0], new object[] { values, reflector }),
@@ -247,13 +245,13 @@ namespace ValveKeyValue
             Type type,
             object[] values,
             IObjectReflector reflector,
-            out object typedEnumerable)
+            [NotNullWhen(true)] out object? typedEnumerable)
         {
-            object listObject = null;
+            object? listObject = null;
 
             if (type.IsArray)
             {
-                var elementType = type.GetElementType();
+                var elementType = type.GetElementType()!;
                 var itemArray = Array.CreateInstance(elementType, values.Length);
 
                 for (int i = 0; i < itemArray.Length; i++)
@@ -272,7 +270,7 @@ namespace ValveKeyValue
                 }
             }
 
-            typedEnumerable = listObject;
+            typedEnumerable = listObject!;
             return listObject != null;
         }
 
@@ -310,7 +308,7 @@ namespace ValveKeyValue
 
             try
             {
-                return method.MakeGenericMethod(genericType).Invoke(null, parameters);
+                return method.MakeGenericMethod(genericType).Invoke(null, parameters)!;
             }
             catch (TargetInvocationException ex) when (ex.InnerException != null)
             {
@@ -357,12 +355,9 @@ namespace ValveKeyValue
             }
 
             var genericType = type.GetGenericTypeDefinition();
-            if (genericType != typeof(Dictionary<,>))
-            {
-                return false;
-            }
-
-            return true;
+            return genericType == typeof(Dictionary<,>)
+                || genericType == typeof(IDictionary<,>)
+                || genericType == typeof(IReadOnlyDictionary<,>);
         }
 
         [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2060", Justification = "Analysis cannot follow MakeGenericMethod but we should be clear by here anyway.")]
@@ -372,29 +367,35 @@ namespace ValveKeyValue
             KVObject kv,
             IObjectReflector reflector)
         {
-            var dictionary = Activator.CreateInstance(type);
             var genericArguments = type.GetGenericArguments();
 
+            // For interface types (IDictionary<,>, IReadOnlyDictionary<,>), use concrete Dictionary<,>
+            var concreteType = type.GetGenericTypeDefinition() == typeof(Dictionary<,>)
+                ? type
+                : typeof(Dictionary<,>).MakeGenericType(genericArguments);
+
+            var dictionary = Activator.CreateInstance(concreteType);
+
             var method = typeof(ObjectCopier)
-                .GetMethod(nameof(FillDictionary), BindingFlags.Static | BindingFlags.NonPublic);
+                .GetMethod(nameof(FillDictionary), BindingFlags.Static | BindingFlags.NonPublic)!;
             method.MakeGenericMethod(genericArguments)
                 .Invoke(null, new[] { dictionary, kv, reflector });
 
-            return dictionary;
+            return dictionary!;
         }
 
-        static void FillDictionary<[DynamicallyAccessedMembers(Trimming.Constructors | Trimming.Properties)] TKey, [DynamicallyAccessedMembers(Trimming.Constructors | Trimming.Properties)] TValue>(Dictionary<TKey, TValue> dictionary, KVObject kv, IObjectReflector reflector)
+        static void FillDictionary<[DynamicallyAccessedMembers(Trimming.Constructors | Trimming.Properties)] TKey, [DynamicallyAccessedMembers(Trimming.Constructors | Trimming.Properties)] TValue>(Dictionary<TKey, TValue> dictionary, KVObject kv, IObjectReflector reflector) where TKey : notnull
         {
-            foreach (var item in kv.Children)
+            foreach (var (childKey, child) in kv)
             {
-                var key = ConvertValue<TKey>(item.Name, reflector);
+                var key = ConvertValue<TKey>(childKey, reflector);
 
                 if (dictionary.ContainsKey(key))
                 {
                     continue;
                 }
 
-                var value = ConvertValue<TValue>(item.Value, reflector);
+                var value = ConvertValue<TValue>(child, reflector);
                 dictionary.Add(key, value);
             }
         }
@@ -407,37 +408,69 @@ namespace ValveKeyValue
             [DynamicallyAccessedMembers(Trimming.Constructors | Trimming.Properties)] Type valueType,
             IObjectReflector reflector)
         {
-            if (value is KVCollectionValue collectionValue)
+            var underlyingType = Nullable.GetUnderlyingType(valueType);
+            if (underlyingType != null)
             {
-                return MakeObject(valueType, new KVObject("boo", (KVValue)collectionValue), reflector);
+                valueType = underlyingType;
             }
 
-            return Convert.ChangeType(value, valueType);
+            if (value is KVObject kvObject)
+            {
+                if (kvObject.ValueType == KVValueType.Collection)
+                {
+                    return MakeObject(valueType, kvObject, reflector);
+                }
+
+                if (kvObject.ValueType == KVValueType.BinaryBlob && valueType == typeof(byte[]))
+                {
+                    return kvObject.AsBlob();
+                }
+
+                return Convert.ChangeType(kvObject.ToType(valueType, null), valueType, CultureInfo.InvariantCulture);
+            }
+
+            return Convert.ChangeType(value, valueType, CultureInfo.InvariantCulture);
         }
 
-        static bool TryConvertValueTo<TValue>(string name, object value, out TValue converted)
+        static bool TryConvertValueTo<TValue>(KVObject value, [MaybeNullWhen(false)] out TValue converted)
         {
             if (typeof(TValue) == typeof(IntPtr))
             {
-                converted = (TValue)(object)(IntPtr)(KVValue)value;
+                converted = (TValue)(object)(IntPtr)value;
                 return true;
             }
 
-            if (CanConvertValueTo(typeof(TValue)) && value is IConvertible)
+            if (typeof(TValue) == typeof(byte[]) && value.ValueType == KVValueType.BinaryBlob)
+            {
+                converted = (TValue)(object)value.AsBlob();
+                return true;
+            }
+
+            var targetType = Nullable.GetUnderlyingType(typeof(TValue)) ?? typeof(TValue);
+
+            if (targetType.IsEnum)
+            {
+                var underlyingType = Enum.GetUnderlyingType(targetType);
+                var underlyingValue = value.ToType(underlyingType, CultureInfo.InvariantCulture);
+                converted = (TValue)Enum.ToObject(targetType, underlyingValue);
+                return true;
+            }
+
+            if (CanConvertValueTo(targetType))
             {
                 try
                 {
-                    converted = (TValue)Convert.ChangeType(value, typeof(TValue), CultureInfo.InvariantCulture);
+                    converted = (TValue)value.ToType(targetType, CultureInfo.InvariantCulture);
                 }
                 catch (Exception e)
                 {
-                    throw new NotSupportedException($"Conversion to {typeof(TValue)} failed. (key = {name}, object type = {value.GetType()})", e);
+                    throw new NotSupportedException($"Conversion to {typeof(TValue)} failed. (type = {value.ValueType})", e);
                 }
 
                 return true;
             }
 
-            converted = default;
+            converted = default!;
             return false;
         }
 
@@ -460,33 +493,33 @@ namespace ValveKeyValue
                 type == typeof(string);
         }
 
-        static KVValue ConvertToKVValue(object value, Type type)
+        static KVObject? ConvertToKVObject(object value, Type type)
         {
             if (type == typeof(IntPtr))
             {
-                return (KVValue)(IntPtr)value;
+                return new KVObject((IntPtr)value);
+            }
+
+            if (type.IsEnum)
+            {
+                type = Enum.GetUnderlyingType(type);
+                value = Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
             }
 
             return Type.GetTypeCode(type) switch
             {
-                TypeCode.Boolean => (KVValue)(bool)value,
-                //TypeCode.Byte => throw new NotImplementedException("Converting to byte is not yet supported"),
-                //TypeCode.Char => throw new NotImplementedException("Converting to char is not yet supported"),
-                //TypeCode.DateTime => throw new NotImplementedException(), // Datetime are not supported
-                //TypeCode.DBNull => throw new NotImplementedException(),
-                //TypeCode.Decimal => throw new NotImplementedException("Converting to decimal is not yet supported"),
-                //TypeCode.Double => throw new NotImplementedException("Converting to double is not yet supported"),
-                //TypeCode.Empty => throw new NotImplementedException(), // No type
-                TypeCode.Int16 => (KVValue)(int)(short)value, // There is no int16 kv type
-                TypeCode.Int32 => (KVValue)(int)value,
-                TypeCode.Int64 => (KVValue)(long)value,
-                //TypeCode.Object => throw new NotImplementedException(), // Objects are handled separately
-                //TypeCode.SByte => throw new NotImplementedException("Converting to sbyte is not yet supported"),
-                TypeCode.Single => (KVValue)(float)value,
-                TypeCode.String => (KVValue)(string)value,
-                TypeCode.UInt16 => (KVValue)(ulong)(ushort)value, // There is no uint16 kv type
-                TypeCode.UInt32 => (KVValue)(ulong)(uint)value, // There is no uint32 kv type
-                TypeCode.UInt64 => (KVValue)(ulong)value,
+                TypeCode.Boolean => new KVObject((bool)value),
+                TypeCode.Byte => new KVObject((int)(byte)value),
+                TypeCode.SByte => new KVObject((int)(sbyte)value),
+                TypeCode.Int16 => new KVObject((int)(short)value),
+                TypeCode.Int32 => new KVObject((int)value),
+                TypeCode.Int64 => new KVObject((long)value),
+                TypeCode.Single => new KVObject((float)value),
+                TypeCode.Double => new KVObject((double)value),
+                TypeCode.String => new KVObject((string)value),
+                TypeCode.UInt16 => new KVObject((ulong)(ushort)value),
+                TypeCode.UInt32 => new KVObject((ulong)(uint)value),
+                TypeCode.UInt64 => new KVObject((ulong)value),
                 _ => null,
             };
         }

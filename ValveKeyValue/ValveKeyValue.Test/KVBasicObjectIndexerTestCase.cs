@@ -3,12 +3,9 @@ namespace ValveKeyValue.Test
     class KVBasicObjectIndexerTestCase
     {
         [Test]
-        public void IndexerOnValueNodeThrowsException()
+        public void IndexerOnValueNodeThrows()
         {
-            Assert.That(
-                () => data["baz"],
-                Throws.Exception.InstanceOf<InvalidOperationException>()
-                .With.Message.EqualTo("This operation on a KVObject can only be used when the value has children."));
+            Assert.That(() => data["baz"], Throws.TypeOf<KeyNotFoundException>());
         }
 
         KVObject data;
@@ -16,7 +13,7 @@ namespace ValveKeyValue.Test
         [OneTimeSetUp]
         public void SetUp()
         {
-            data = new KVObject("foo", "bar");
+            data = new KVObject("bar");
         }
     }
 }

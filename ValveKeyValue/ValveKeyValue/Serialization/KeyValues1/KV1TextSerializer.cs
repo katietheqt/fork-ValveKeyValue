@@ -1,53 +1,91 @@
+using System.Buffers;
 using System.Globalization;
 using System.Text;
 using ValveKeyValue.Abstraction;
 
 namespace ValveKeyValue.Serialization.KeyValues1
 {
-    sealed class KV1TextSerializer : IVisitationListener, IDisposable
+    sealed class KV1TextSerializer : KVTextSerializerBase, IVisitationListener
     {
-        public KV1TextSerializer(Stream stream, KVSerializerOptions options)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
-            ArgumentNullException.ThrowIfNull(options);
+        static readonly SearchValues<char> CharsToEscape = SearchValues.Create("\"\\");
 
+        public KV1TextSerializer(Stream stream, KVSerializerOptions options)
+            : base(stream)
+        {
+            ArgumentNullException.ThrowIfNull(options);
             this.options = options;
-            writer = new StreamWriter(stream, new UTF8Encoding(), bufferSize: 1024, leaveOpen: true)
-            {
-                NewLine = "\n"
-            };
+        }
+
+        public KV1TextSerializer(StringBuilder sb, List<KvSourceSpan> sourceMap, KVSerializerOptions options)
+            : base(sb, sourceMap)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            this.options = options;
         }
 
         readonly KVSerializerOptions options;
-        readonly TextWriter writer;
-        int indentation = 0;
+        readonly Stack<int> arrayCount = new();
 
-        public void Dispose()
-        {
-            writer.Dispose();
-        }
-
-        public void OnObjectStart(string name)
+        public void OnObjectStart(string? name, KVFlag flag)
             => WriteStartObject(name);
 
         public void OnObjectEnd()
             => WriteEndObject();
 
-        public void OnKeyValuePair(string name, KVValue value)
+        public void OnKeyValuePair(string name, KVObject value)
             => WriteKeyValuePair(name, value);
+
+        public void OnArrayStart(string? name, KVFlag flag, int elementCount, bool allSimpleElements)
+        {
+            WriteStartObject(name);
+            arrayCount.Push(0);
+        }
+
+        public void OnArrayValue(KVObject value)
+        {
+            var count = arrayCount.Pop();
+
+            WriteKeyValuePair(count.ToString(CultureInfo.InvariantCulture), value);
+
+            arrayCount.Push(count + 1);
+        }
+
+        public void OnArrayEnd()
+        {
+            WriteEndObject();
+            arrayCount.Pop();
+        }
 
         public void DiscardCurrentObject()
         {
             throw new NotSupportedException("Discard not supported when writing.");
         }
 
-        void WriteStartObject(string name)
+        void WriteStartObject(string? name)
         {
+            if (name == null)
+            {
+                if (arrayCount.Count > 0)
+                {
+                    var count = arrayCount.Pop();
+
+                    name = count.ToString(CultureInfo.InvariantCulture);
+
+                    arrayCount.Push(count + 1);
+                }
+                else
+                {
+                    name = string.Empty;
+                }
+            }
+
             WriteIndentation();
+            var keyStart = Position;
             WriteText(name);
+            Record(keyStart, KVTokenType.Key);
             WriteLine();
             WriteIndentation();
-            writer.Write('{');
+            Record(KVTokenType.ObjectStart, '{');
             indentation++;
             WriteLine();
         }
@@ -56,49 +94,62 @@ namespace ValveKeyValue.Serialization.KeyValues1
         {
             indentation--;
             WriteIndentation();
-            writer.Write('}');
+            Record(KVTokenType.ObjectEnd, '}');
             writer.WriteLine();
         }
 
-        void WriteKeyValuePair(string name, IConvertible value)
+        void WriteKeyValuePair(string name, KVObject value)
         {
             WriteIndentation();
+            var keyStart = Position;
             WriteText(name);
+            Record(keyStart, KVTokenType.Key);
             writer.Write('\t');
-            WriteText(value.ToString(CultureInfo.InvariantCulture));
-            WriteLine();
-        }
 
-        void WriteIndentation()
-        {
-            if (indentation == 0)
+            var valueStart = Position;
+            if (value.IsNull)
             {
-                return;
+                WriteText(string.Empty);
             }
+            else if (value.ValueType == KVValueType.Boolean)
+            {
+                WriteText(value.ToBoolean(null) ? "1" : "0");
+            }
+            else
+            {
+                WriteText(value.ToString(CultureInfo.InvariantCulture));
+            }
+            Record(valueStart, KVTokenType.String);
 
-            var text = new string('\t', indentation);
-            writer.Write(text);
+            WriteLine();
         }
 
         void WriteText(string text)
         {
             writer.Write('"');
 
-            foreach (var @char in text)
+            if (!text.AsSpan().ContainsAny(CharsToEscape))
             {
-                switch (@char)
+                writer.Write(text);
+            }
+            else
+            {
+                foreach (var @char in text)
                 {
-                    case '"':
-                        writer.Write("\\\"");
-                        break;
+                    switch (@char)
+                    {
+                        case '"':
+                            writer.Write("\\\"");
+                            break;
 
-                    case '\\':
-                        writer.Write(options.HasEscapeSequences ? "\\\\" : "\\");
-                        break;
+                        case '\\':
+                            writer.Write(options.HasEscapeSequences ? "\\\\" : "\\");
+                            break;
 
-                    default:
-                        writer.Write(@char);
-                        break;
+                        default:
+                            writer.Write(@char);
+                            break;
+                    }
                 }
             }
 

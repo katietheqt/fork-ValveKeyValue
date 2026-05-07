@@ -20,8 +20,11 @@ namespace ValveKeyValue.Test
 
             dataObject1.Other = dataObject2;
 
-            Assert.That(dataObject1.Other, Is.SameAs(dataObject2), "Sanity check");
-            Assert.That(dataObject2.Other, Is.SameAs(dataObject1), "Sanity check");
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(dataObject1.Other, Is.SameAs(dataObject2), "Sanity check");
+                Assert.That(dataObject2.Other, Is.SameAs(dataObject1), "Sanity check");
+            }
 
             using var ms = new MemoryStream();
             Assert.That(
@@ -55,12 +58,12 @@ namespace ValveKeyValue.Test
 
         class DataObject
         {
-            public string Name { get; set; }
+            public required string Name { get; set; }
 
-            public DataObject Other { get; set; }
+            public DataObject? Other { get; set; }
         }
 
-        public class DataObjectWithList
+        internal class DataObjectWithList
         {
             public List<string> Strings { get; set; } = new List<string>();
             public List<int> Ints { get; set; } = new List<int>();

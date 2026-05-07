@@ -1,8 +1,8 @@
 namespace ValveKeyValue.Deserialization
 {
-    class KVTokenReader : IDisposable
+    abstract class KVTokenReader : IDisposable
     {
-        public KVTokenReader(TextReader textReader)
+        protected KVTokenReader(TextReader textReader)
         {
             ArgumentNullException.ThrowIfNull(textReader);
 
@@ -11,25 +11,51 @@ namespace ValveKeyValue.Deserialization
 
         protected TextReader textReader;
         protected bool disposed;
-        protected int? peekedNext;
+        int peekedNext = -1;
 
         int lineOffset;
         int columnOffset;
+        int charOffset;
 
         public int Line => lineOffset + 1;
         public int Column => columnOffset + 1;
 
-        public int PreviousTokenStartLine { get; protected set; }
-        public int PreviousTokenStartColumn { get; protected set; }
+        // Character offset of the next character to read, advancing by exactly one per character
+        // consumed from the input. Source-map deserialization indexes into the same text as a
+        // string, so these offsets line up with substring boundaries on the caller side.
+        public int CharOffset => charOffset;
+
+        // Character range [LastTokenStart, LastTokenEnd) of the most recently returned token,
+        // measured after leading whitespace was skipped. Source-map deserializers read these
+        // after each ReadNextToken() call to index into the same text the parser saw.
+        public int LastTokenStart { get; private set; }
+        public int LastTokenEnd { get; private set; }
+
+        public int PreviousTokenStartLine { get; private set; }
+        public int PreviousTokenStartColumn { get; private set; }
         public string PreviousTokenPosition => $"line {PreviousTokenStartLine}, column {PreviousTokenStartColumn}";
+
+        public KVToken ReadNextToken()
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            SwallowWhitespace();
+
+            PreviousTokenStartLine = Line;
+            PreviousTokenStartColumn = Column;
+
+            LastTokenStart = charOffset;
+            var token = ReadNextTokenInner();
+            LastTokenEnd = charOffset;
+            return token;
+        }
+
+        protected abstract KVToken ReadNextTokenInner();
 
         public void Dispose()
         {
             if (!disposed)
             {
                 textReader.Dispose();
-                textReader = null;
-
                 disposed = true;
             }
         }
@@ -40,10 +66,10 @@ namespace ValveKeyValue.Deserialization
         {
             int nextValue;
 
-            if (peekedNext.HasValue)
+            if (peekedNext != -1)
             {
-                nextValue = peekedNext.Value;
-                peekedNext = null;
+                nextValue = peekedNext;
+                peekedNext = -1;
             }
             else
             {
@@ -66,15 +92,16 @@ namespace ValveKeyValue.Deserialization
                 columnOffset++;
             }
 
+            charOffset++;
             next = (char)nextValue;
             return true;
         }
 
         protected int Peek()
         {
-            if (peekedNext.HasValue)
+            if (peekedNext != -1)
             {
-                return peekedNext.Value;
+                return peekedNext;
             }
 
             var next = textReader.Read();

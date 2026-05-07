@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Linq;
 
 namespace ValveKeyValue.Test
@@ -14,11 +15,11 @@ namespace ValveKeyValue.Test
 
         [Test]
         public void IsObjectWithChildren()
-            => Assert.That(obj.Value.ValueType, Is.EqualTo(KVValueType.Collection));
+            => Assert.That(obj.Root.ValueType, Is.EqualTo(KVValueType.Collection));
 
         [TestCase(ExpectedResult = 5)]
         public int HasChildren()
-            => obj.Children.Count();
+            => obj.Root.Children.Count();
 
         [TestCase("key", "value", typeof(string))]
         [TestCase("int", 0x01020304, typeof(int))]
@@ -27,7 +28,7 @@ namespace ValveKeyValue.Test
         [TestCase("i64", 0x0102030405060708, typeof(long))]
         public void HasNamedChildWithValue(string name, object value, Type valueType)
         {
-            Assert.That(Convert.ChangeType(obj[name], valueType), Is.EqualTo(value));
+            Assert.That(Convert.ChangeType(obj[name], valueType, CultureInfo.InvariantCulture), Is.EqualTo(value));
         }
 
         [Test]
@@ -41,7 +42,7 @@ namespace ValveKeyValue.Test
             Assert.That(ms.ToArray(), Is.EqualTo(TestData.ToArray()));
         }
 
-        KVObject obj;
+        KVDocument obj;
 
         [OneTimeSetUp]
         public void SetUp()

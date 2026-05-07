@@ -4,17 +4,13 @@ namespace ValveKeyValue.Deserialization.KeyValues1
     {
         public KV1TextReaderStateMachine()
         {
-            states = new Stack<KVPartialState<KV1TextReaderState>>();
-            includedPathsToMerge = new List<string>();
-            includedPathsToAppend = new List<string>();
-
             PushObject();
             Push(KV1TextReaderState.InObjectBeforeKey);
         }
 
-        readonly Stack<KVPartialState<KV1TextReaderState>> states;
-        readonly IList<string> includedPathsToMerge;
-        readonly IList<string> includedPathsToAppend;
+        readonly Stack<KVPartialState<KV1TextReaderState>> states = new();
+        readonly List<string> includedPathsToMerge = new();
+        readonly List<string> includedPathsToAppend = new();
 
         public KV1TextReaderState Current => CurrentObject.States.Peek();
 
@@ -32,15 +28,15 @@ namespace ValveKeyValue.Deserialization.KeyValues1
             discard = state.Discard;
         }
 
-        public string CurrentName => CurrentObject.Key;
+        public string? CurrentName => CurrentObject.Key;
 
         public void Pop() => CurrentObject.States.Pop();
 
         public void SetName(string name) => CurrentObject.Key = name;
 
-        public void SetValue(KVValue value) => CurrentObject.Value = value;
+        public void SetValue(KVObject value) => CurrentObject.Value = value;
 
-        public void AddItem(KVObject item) => CurrentObject.Items.Add(item);
+        public void AddItem(string key, KVObject item) => CurrentObject.Items.Add(new KeyValuePair<string, KVObject>(key, item));
 
         public void SetDiscardCurrent() => CurrentObject.Discard = true;
 

@@ -1,13 +1,12 @@
 <Project>
   <PropertyGroup>
-    <ProjectBaseVersion>0.20.0</ProjectBaseVersion>
+    <ProjectBaseVersion>0.70.0</ProjectBaseVersion>
     <ProjectVersion Condition="'$(GITHUB_RUN_NUMBER)' != ''">$(ProjectBaseVersion).$(GITHUB_RUN_NUMBER)</ProjectVersion>
     <ProjectVersion Condition="'$(GITHUB_RUN_NUMBER)' == ''">$(ProjectBaseVersion).0</ProjectVersion>
 
     <AssemblyVersion>$(ProjectBaseVersion)</AssemblyVersion>
     <FileVersion>$(ProjectVersion)</FileVersion>
     <Version>$(ProjectVersion)</Version>
-	<LangVersion>latest</LangVersion>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -19,6 +18,8 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <PropertyGroup>

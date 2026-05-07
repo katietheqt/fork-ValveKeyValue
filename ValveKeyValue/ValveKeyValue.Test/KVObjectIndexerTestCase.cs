@@ -5,16 +5,18 @@ namespace ValveKeyValue.Test
         [TestCase("foo", ExpectedResult = "bar")]
         [TestCase("bar", ExpectedResult = "baz")]
         [TestCase("baz", ExpectedResult = "-")]
-        [TestCase("foobar", ExpectedResult = null)]
         public string IndexerReturnsChildValue(string key) => (string)data[key];
 
         [Test]
-        public void IndexerOnValueNodeThrowsException()
+        public void IndexerThrowsForMissingKey()
         {
-            Assert.That(
-                () => data["foo"]["bar"],
-                Throws.Exception.InstanceOf<NotSupportedException>()
-                .With.Message.EqualTo("The indexer on a KVValue can only be used on a KVValue that has children."));
+            Assert.That(() => data["foobar"], Throws.TypeOf<KeyNotFoundException>());
+        }
+
+        [Test]
+        public void IndexerOnValueNodeThrows()
+        {
+            Assert.That(() => data["foo"]["bar"], Throws.TypeOf<KeyNotFoundException>());
         }
 
         KVObject data;
@@ -22,13 +24,10 @@ namespace ValveKeyValue.Test
         [OneTimeSetUp]
         public void SetUp()
         {
-            data = new KVObject(
-                "test data",
-                [
-                    new KVObject("foo", "bar"),
-                    new KVObject("bar", "baz"),
-                    new KVObject("baz", "-"),
-                ]);
+            data = KVObject.ListCollection();
+            data.Add("foo", "bar");
+            data.Add("bar", "baz");
+            data.Add("baz", "-");
         }
     }
 }

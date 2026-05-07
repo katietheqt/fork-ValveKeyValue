@@ -22,15 +22,8 @@ namespace ValveKeyValue.Deserialization.KeyValues1
         readonly StringBuilder sb = new();
         readonly KVSerializerOptions options;
 
-        public KVToken ReadNextToken()
+        protected override KVToken ReadNextTokenInner()
         {
-            ObjectDisposedException.ThrowIf(disposed, this);
-
-            SwallowWhitespace();
-
-            PreviousTokenStartLine = Line;
-            PreviousTokenStartColumn = Column;
-
             var nextChar = Peek();
             if (IsEndOfFile(nextChar))
             {
@@ -97,7 +90,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
 
             if (sb.Length > 0 && sb[^1] == '\r')
             {
-                sb.Remove(sb.Length - 1, 1);
+                sb.Length--;
             }
 
             var text = sb.ToString();
@@ -180,7 +173,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
 
             // Valve bug-for-bug compatibility with tier1 KeyValues/CUtlBuffer: an invalid escape sequence is a null byte which
             // causes the text to be trimmed to the point of that null byte.
-            if (options.EnableValveNullByteBugBehavior && result.IndexOf('\0') is var nullByteIndex && nullByteIndex >= 0)
+            if (options.EnableValveNullByteBugBehavior && result.IndexOf('\0', StringComparison.Ordinal) is var nullByteIndex && nullByteIndex >= 0)
             {
                 result = result[..nullByteIndex];
             }

@@ -5,7 +5,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
 {
     sealed class KV1TextReader : IVisitingReader
     {
-        public KV1TextReader(TextReader textReader, IParsingVisitationListener listener, KVSerializerOptions options)
+        public KV1TextReader(TextReader textReader, IParsingVisitationListener listener, KVSerializerOptions options, List<KvSourceSpan>? sourceMap = null)
         {
             ArgumentNullException.ThrowIfNull(textReader);
             ArgumentNullException.ThrowIfNull(listener);
@@ -13,21 +13,25 @@ namespace ValveKeyValue.Deserialization.KeyValues1
 
             this.listener = listener;
             this.options = options;
+            this.sourceMap = sourceMap;
 
             conditionEvaluator = new KVConditionEvaluator(options.Conditions);
             tokenReader = new KV1TokenReader(textReader, options);
             stateMachine = new KV1TextReaderStateMachine();
         }
 
+#pragma warning disable CA2213 // Not owned by this class
         readonly IParsingVisitationListener listener;
+#pragma warning restore CA2213
         readonly KVSerializerOptions options;
+        readonly List<KvSourceSpan>? sourceMap;
 
         readonly KVConditionEvaluator conditionEvaluator;
         readonly KV1TokenReader tokenReader;
         readonly KV1TextReaderStateMachine stateMachine;
         bool disposed;
 
-        public void ReadObject()
+        public KVHeader ReadHeader()
         {
             ObjectDisposedException.ThrowIf(disposed, this);
 
@@ -48,10 +52,24 @@ namespace ValveKeyValue.Deserialization.KeyValues1
                     throw new KeyValueException("Found end of file while trying to read token.", ex);
                 }
 
+                if (sourceMap != null && token.TokenType != KVTokenType.EndOfFile)
+                {
+                    // KV1 keys are always quoted strings. They appear either at the start of
+                    // an object (InObjectBeforeKey) or right after the previous value
+                    // (InObjectAfterValue), since the state machine only flips back to
+                    // BeforeKey once ReadText runs and decides the token starts a new pair.
+                    var state = stateMachine.Current;
+                    var resolved = token.TokenType == KVTokenType.String
+                        && (state == KV1TextReaderState.InObjectBeforeKey || state == KV1TextReaderState.InObjectAfterValue)
+                        ? KVTokenType.Key
+                        : token.TokenType;
+                    sourceMap.Add(new KvSourceSpan(tokenReader.LastTokenStart, tokenReader.LastTokenEnd, resolved));
+                }
+
                 switch (token.TokenType)
                 {
                     case KVTokenType.String:
-                        ReadText(token.Value);
+                        ReadText(token.Value!);
                         break;
 
                     case KVTokenType.ObjectStart:
@@ -63,7 +81,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
                         break;
 
                     case KVTokenType.Condition:
-                        HandleCondition(token.Value);
+                        HandleCondition(token.Value!);
                         break;
 
                     case KVTokenType.EndOfFile:
@@ -87,7 +105,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
                             throw new KeyValueException($"Inclusions are only valid at the beginning of a file, but found one at {tokenReader.PreviousTokenPosition}.");
                         }
 
-                        stateMachine.AddItemForMerging(token.Value);
+                        stateMachine.AddItemForMerging(token.Value!);
                         break;
 
                     case KVTokenType.IncludeAndAppend:
@@ -96,13 +114,15 @@ namespace ValveKeyValue.Deserialization.KeyValues1
                             throw new KeyValueException($"Inclusions are only valid at the beginning of a file, but found one at {tokenReader.PreviousTokenPosition}.");
                         }
 
-                        stateMachine.AddItemForAppending(token.Value);
+                        stateMachine.AddItemForAppending(token.Value!);
                         break;
 
                     default:
                         throw new ArgumentOutOfRangeException(nameof(token.TokenType), token.TokenType, "Unhandled token type.");
                 }
             }
+
+            return new KVHeader();
         }
 
         public void Dispose()
@@ -131,7 +151,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
 
                 case KV1TextReaderState.InObjectBetweenKeyAndValue:
                     var value = ParseValue(text);
-                    var name = stateMachine.CurrentName;
+                    var name = stateMachine.CurrentName!;
                     listener.OnKeyValuePair(name, value);
 
                     stateMachine.Push(KV1TextReaderState.InObjectAfterValue);
@@ -155,7 +175,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
                 throw new InvalidOperationException($"Attempted to begin new object while in state {stateMachine.Current} at {tokenReader.PreviousTokenPosition}.");
             }
 
-            listener.OnObjectStart(stateMachine.CurrentName);
+            listener.OnObjectStart(stateMachine.CurrentName, KVFlag.None);
 
             stateMachine.PushObject();
             stateMachine.Push(KV1TextReaderState.InObjectBeforeKey);
@@ -212,7 +232,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
                 throw new InvalidDataException($"Found conditional while in state {stateMachine.Current}.");
             }
 
-            if (!conditionEvaluator.Evalute(text))
+            if (!conditionEvaluator.Evaluate(text))
             {
                 stateMachine.SetDiscardCurrent();
             }
@@ -224,7 +244,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
 
             using var stream = OpenFileForInclude(filePath);
             using var reader = new KV1TextReader(new StreamReader(stream), mergeListener, options);
-            reader.ReadObject();
+            reader.ReadHeader();
         }
 
         void DoIncludeAndAppend(string filePath)
@@ -233,7 +253,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
 
             using var stream = OpenFileForInclude(filePath);
             using var reader = new KV1TextReader(new StreamReader(stream), appendListener, options);
-            reader.ReadObject();
+            reader.ReadHeader();
         }
 
         Stream OpenFileForInclude(string filePath)
@@ -248,7 +268,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
             return stream;
         }
 
-        static KVValue ParseValue(string text)
+        static KVObject ParseValue(string text)
         {
             // "0x" + 2 digits per byte. Long is 8 bytes, so s + 16 = 18.
             // Expressed this way for readability, rather than using a magic value.
@@ -265,7 +285,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
                 }
 
                 var value = BitConverter.ToUInt64(data, 0);
-                return new KVObjectValue<ulong>(value, KVValueType.UInt64);
+                return new KVObject(value);
             }
 
             const NumberStyles IntegerNumberStyles =
@@ -274,7 +294,7 @@ namespace ValveKeyValue.Deserialization.KeyValues1
 
             if (int.TryParse(text, IntegerNumberStyles, CultureInfo.InvariantCulture, out var intValue))
             {
-                return new KVObjectValue<int>(intValue, KVValueType.Int32);
+                return new KVObject(intValue);
             }
 
             const NumberStyles FloatingPointNumberStyles =
@@ -285,15 +305,15 @@ namespace ValveKeyValue.Deserialization.KeyValues1
 
             if (!IsStrToLBase10Compatible(text) && float.TryParse(text, FloatingPointNumberStyles, CultureInfo.InvariantCulture, out var floatValue))
             {
-                return new KVObjectValue<float>(floatValue, KVValueType.FloatingPoint);
+                return new KVObject(floatValue);
             }
 
-            return new KVObjectValue<string>(text, KVValueType.String);
+            return new KVObject(text);
         }
 
         // The string may begin with an arbitrary amount of white space (as determined by isspace(3)) followed by a single optional
-        // ‘+’ or ‘-’ sign.  If base is zero or 16, the string may then include a “0x” prefix, and the number will be read in base 16;
-        // otherwise, a zero base is taken as 10 (decimal) unless the next character is ‘0’, in which case it is taken as 8 (octal).
+        // '+' or '-' sign.  If base is zero or 16, the string may then include a "0x" prefix, and the number will be read in base 16;
+        // otherwise, a zero base is taken as 10 (decimal) unless the next character is '0', in which case it is taken as 8 (octal).
         // The remainder of the string is converted to a long, long long, intmax_t or quad_t value in the obvious manner, stopping at
         // the first character which is not a valid digit in the given base.
         // - man(3) page for strtol

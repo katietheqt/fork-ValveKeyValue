@@ -25,7 +25,7 @@ namespace ValveKeyValue.Test
         [TestCase("Key3", ExpectedResult = "Value3")]
         public string UnquotedChildValue(string key) => (string)data["UnquotedChild"][key];
 
-        KVObject data;
+        KVDocument data;
 
         [OneTimeSetUp]
         public void SetUp()
